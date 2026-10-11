@@ -1,0 +1,26 @@
+# Keep local configuration and credentials out of every commit.
+.env
+.env.*
+!.env.example
+!.env.*.example
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+
+# Python virtual environments, bytecode, and local test caches.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Frontend dependencies and generated build output.
+node_modules/
+web/dist/
+dist/
+
+# The original assignment prompt is not a project deliverable.
+/PROBLEM_STATEMENT.docx
