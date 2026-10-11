@@ -221,4 +221,4 @@ This file is a plain-language record of how the assignment is built. Each entry 
 
 **Phase 3 — Commit:** `git add -A`, `git diff --cached --check`, and one initial commit on `main`. The exact staged file list was reviewed before commit.
 
-**Phase 4 — Publish:** Push `main` to `https://github.com/Consoder/HROne.git`, then confirm the remote commit and public file listing. This phase is only complete once the push succeeds.
+**Phase 4 — Publish:** Pushed `main` to `https://github.com/Consoder/HROne.git`. The initial implementation commit `27d2695` was confirmed as the remote `main` ref with `git ls-remote`; GitHub's public contents API lists the expected root documents and `app/`, `tests/`, `sample_data/`, and `web/` directories. The required assignment form has not been submitted; that remains the final human submission step.
