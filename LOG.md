@@ -222,3 +222,13 @@ This file is a plain-language record of how the assignment is built. Each entry 
 **Phase 3 — Commit:** `git add -A`, `git diff --cached --check`, and one initial commit on `main`. The exact staged file list was reviewed before commit.
 
 **Phase 4 — Publish:** Pushed `main` to `https://github.com/Consoder/HROne.git`. The initial implementation commit `27d2695` was confirmed as the remote `main` ref with `git ls-remote`; GitHub's public contents API lists the expected root documents and `app/`, `tests/`, `sample_data/`, and `web/` directories. The required assignment form has not been submitted; that remains the final human submission step.
+
+## 2026-10-12 - Read-only HTTP load test
+
+**What:** Added `tests/load_test.py`, a standard-library concurrent GET load harness, and ran it against a separate Uvicorn process on port 8010 connected to the generated `attendance_scale` MongoDB 7 database (1,000 employees, 100,000 logs). All routes were warmed up before timing. The suite does not issue write requests.
+
+**Profiles/results:** One client, one seven-route pass: 7/7 HTTP 200, 20.636 seconds end-to-end, 0.34 requests/s; largest observed request was late leaderboard at 12.24 seconds. Five concurrent clients, four passes each: 140/140 HTTP 200, zero errors, 145.111 seconds, 0.96 requests/s. Overall latency p50/p95/p99 was 94.8/23,546.1/23,940.3 ms. Per-route p50: health 15 ms, employees 38 ms, attendance list 95 ms, employee monthly 38 ms, department summary 4,692 ms, late leaderboard 22,551 ms, department trend 8,428 ms.
+
+**Conclusion:** Functional availability held under this modest read concurrency, but analytics response times are too high to call the load test a performance pass. IXSCAN explain results are not a substitute for runtime latency. No latency target was supplied, so this result identifies a bottleneck rather than a formal SLO failure.
+
+**Limits:** Local synthetic-data benchmark only; not a sustained soak test or production-capacity certification. The harness expects the existing generated `attendance_scale` database; its generator was not included. Server process on port 8010 was stopped after both runs.

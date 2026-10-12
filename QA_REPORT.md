@@ -89,3 +89,16 @@ The findings above describe the original QA snapshot. The four frontend defects 
 **Retest:** The browser rendered the employee directory (7 employees), all-company attendance view (2 current-month records), analytics tables (four departments and empty late-arrival state), and corrected Overview punch state (Asha's current-day check-in is recognized; check-in disabled/check-out available). Production Vite build passed. Backend suite passed all 50 integration/edge tests. The browser automation tool could not reliably dispatch a native `input[type=month]` change using its fill operation, so the February test was confirmed directly against the live API and by reviewing the UI's date-bound construction; physical/native date-picker interaction still deserves a manual click-through.
 
 **Scope note:** No check-in/out or print/export action was triggered during this retest, to avoid changing sample attendance data or opening the system print dialog. Employee correction/audit workflows remain available through the API/Swagger rather than this dashboard UI.
+
+## HTTP load check — 2026-10-12
+
+Ran `tests/load_test.py` against a separate Uvicorn process on port 8010, configured to use the synthetic `attendance_scale` database (MongoDB 7; 1,000 employees and 100,000 attendance rows). All measured requests were read-only GETs. Seven route families were exercised: health, employees, attendance list, employee monthly, department summary, late leaderboard, and a seven-day department trend.
+
+| Profile | Timed requests | HTTP errors | Duration | Throughput | Overall p50 | Overall p95 | Overall p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 client × 1 route pass | 7 | 0 | 20.636 s | 0.34 req/s | 51.2 ms | 12,238.9 ms | 12,238.9 ms |
+| 5 clients × 4 route passes | 140 | 0 | 145.111 s | 0.96 req/s | 94.8 ms | 23,546.1 ms | 23,940.3 ms |
+
+The 5-client per-route p50 latencies were: health 15 ms, employees 38 ms, attendance list 95 ms, employee monthly 38 ms, department summary 4,692 ms, late leaderboard 22,551 ms, department trend 8,428 ms. Every request returned HTTP 200, but the analytical endpoints are a major latency bottleneck even at this modest concurrency; the 22.6-second leaderboard p50 and 8.4-second trend p50 make this a correctness pass but not a performance pass under the measured profile. Single-client observations were also slow for those aggregations: department summary 2.67 s, leaderboard 12.24 s, trend 5.63 s. The indexed explain plans therefore do not imply acceptable runtime.
+
+**Limits:** This is a local development benchmark, not a production capacity/SLO certification. It ran against the existing synthetic scale database and uses only GET traffic. It does not model internet/network latency, multi-process deployment, write contention, or a sustained soak test. The test harness is reusable only when that synthetic database has already been generated; the generator is not included in the submission.
