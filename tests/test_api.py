@@ -89,6 +89,7 @@ class AttendanceApiTests(unittest.TestCase):
         """The startup indexes are the foundation for race safety and query plans."""
         self.assertIn("employee_code_unique", main.db.employees.index_information())
         self.assertIn("employee_date_unique", main.db.attendance_logs.index_information())
+        self.assertIn("employee_punch_in_desc", main.db.attendance_logs.index_information())
 
 
 if __name__ == "__main__":

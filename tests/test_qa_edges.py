@@ -115,6 +115,12 @@ class AttendanceEdgeQa(unittest.TestCase):
         self.assertEqual(response.status_code, 201)
         self.assertEqual(response.json()["late_minutes"], 0)
 
+    def test_early_arrival_has_zero_late_minutes(self):
+        """Flooring a negative offset must not label early arrivals as late."""
+        response = self.post_in("2026-10-02", "09:29:59")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(response.json()["late_minutes"], 0)
+
     def test_11_late_grace_one_second_over_boundary_is_late(self):
         response = self.post_in("2026-10-03", "09:40:01")
         self.assertEqual(response.status_code, 201)

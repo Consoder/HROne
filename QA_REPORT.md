@@ -1,7 +1,7 @@
 # QA Report — Attendance API and React UI
 
 **Run date:** 12 October 2026
-**Result:** Backend suite: 51/51 passing (5 existing + 46 added edge cases). The initial frontend run exposed two defects; both are documented as fixed in the repair follow-up below. The production frontend build passes.
+**Result:** Backend suite: 52/52 passing (5 existing + 47 added edge cases). The initial frontend run exposed two defects; both are documented as fixed in the repair follow-up below. The production frontend build passes.
 
 ## Test environment and safety
 
@@ -12,12 +12,12 @@
 
 ## Backend automated coverage
 
-`tests/test_qa_edges.py` adds 46 named tests. Together with the five existing integration tests, the suite passes 51 tests.
+`tests/test_qa_edges.py` adds 47 named tests. Together with the five existing integration tests, the suite passes 52 tests.
 
 | Area | Cases exercised |
 |---|---|
 | Employee input | Invalid employee-code shape, malformed email, whitespace-only name/department, impossible date, noncanonical clock, equal shift clocks, duplicate code |
-| Punch input and time boundaries | Unknown employee, ignored client-derived field, seconds/string/float/bool timestamps, values below/above epoch range, exactly 10-minute grace and 1-second-over boundary |
+| Punch input and time boundaries | Unknown employee, ignored client-derived field, seconds/string/float/bool timestamps, values below/above epoch range, early arrival, exactly 10-minute grace and 1-second-over boundary |
 | Punch lifecycle | Duplicate same-day punch-in, no punch-in, punch-out at same instant, punch-out before punch-in, >24-hour duration, exact 24-hour duration, repeat punch-out |
 | Derived attendance rules | Overtime at 29m59s and exactly 30m, half-day just below 4.5h and exactly 4.5h |
 | Overnight shifts | Punch at 05:59:59 belongs to the prior attendance date; punch at 06:00 begins the new date |

@@ -254,3 +254,11 @@ This file is a plain-language record of how the assignment is built. Each entry 
 **Actionable remaining recommendation:** Rabbitcode identified that punch-out searches by `{emp_code, punch_in <= punched}` and sorts by `punch_in` descending, while startup currently has no `{emp_code, punch_in}` index. This may scan/sort one employee's historical records. Measure this path on a growing history before adding the extra index, since each index also adds storage and write cost. A status-led attendance-list index is similarly workload-dependent. Neither index was added during this review-only request.
 
 **Result:** Both agents agree the core aggregation/race-safety design is sound, but reviews must be reconciled against the current commit: several findings were stale. No code changes were made; this review summary is the only project-file update for this step.
+
+## 2026-10-12 - Addressed current review optimization
+
+**What changed:** Added `employee_punch_in_desc` on `(emp_code, punch_in descending)` for the punch-out query, plus a startup-index regression assertion. Added an explicit 09:29:59 early-arrival test to protect zero late minutes. Updated `DECISIONS.md` to explain the new index and current summary pipeline structure.
+
+**Why:** The punch-out filter/sort has no useful prefix in the prior indexes, so it could scan an employee's history and sort candidates. The compound index matches the equality predicate followed by the requested newest-first range ordering. Early arrival was already handled correctly; a direct test prevents regression and closes the coverage gap.
+
+**Checks:** All 52 Python integration/edge tests passed against the isolated `attendance_api_test` database. MongoDB `executionStats` for the punch-out find/sort/limit query showed `IXSCAN` with `employee_punch_in_desc`, no collection scan, and a top-level `LIMIT`. The extra index adds storage and per-write maintenance, accepted to support this core punch-out operation. No latency claim is made for this query beyond its indexed plan; the 100k GET benchmark does not exercise punch-out writes.
