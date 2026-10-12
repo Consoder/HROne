@@ -267,6 +267,13 @@ def indexes() -> None:
     db.employees.create_index([("joined_on", ASCENDING)], name="joined_on_lookup")
     db.attendance_logs.create_index([("emp_code", ASCENDING), ("date", ASCENDING)], unique=True, name="employee_date_unique")
     db.attendance_logs.create_index([("date", DESCENDING), ("emp_code", ASCENDING)], name="date_desc_employee")
+    # These are all fields the monthly department summary reads from logs.
+    # Keeping them in a date-leading index lets Mongo scan the month without
+    # fetching each full attendance document before grouping.
+    db.attendance_logs.create_index([
+        ("date", ASCENDING), ("emp_code", ASCENDING), ("status", ASCENDING),
+        ("half_day", ASCENDING), ("work_hours", ASCENDING), ("late_minutes", ASCENDING),
+    ], name="department_summary_cover")
     # Punch-out selects the newest earlier punch for one employee; this index
     # supports both its employee equality filter and descending punch-time sort.
     db.attendance_logs.create_index([("emp_code", ASCENDING), ("punch_in", DESCENDING)], name="employee_punch_in_desc")

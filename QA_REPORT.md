@@ -111,3 +111,16 @@ Optimized 5-client per-route p50s were: health 25.9 ms, employees 42.8 ms, atten
 The 5-client per-route p50 latencies were: health 15 ms, employees 38 ms, attendance list 95 ms, employee monthly 38 ms, department summary 4,692 ms, late leaderboard 22,551 ms, department trend 8,428 ms. Every request returned HTTP 200, but the analytical endpoints are a major latency bottleneck even at this modest concurrency; the 22.6-second leaderboard p50 and 8.4-second trend p50 make this a correctness pass but not a performance pass under the measured profile. Single-client observations were also slow for those aggregations: department summary 2.67 s, leaderboard 12.24 s, trend 5.63 s. The indexed explain plans therefore do not imply acceptable runtime.
 
 **Conclusion and limits:** This is a functional HTTP-success pass, but not a complete latency pass: no formal latency threshold was supplied, and summary remains ~4.5 s p50 at 5 clients. This is a local development benchmark, not production capacity/SLO certification. It uses only GET traffic and does not model internet/network latency, multi-process deployment, write contention, or a sustained soak test. The harness expects the existing synthetic database; its generator is not included in the submission.
+
+### Department-summary follow-up — covering index
+
+Added the date-leading `department_summary_cover` index over `date`, `emp_code`, `status`, `half_day`, `work_hours`, and `late_minutes`. These are the fields read by the month match and grouping stages. On the 100k synthetic database, the summary's execution plan now uses `PROJECTION_COVERED` with `IXSCAN`, examines 31,000 keys and zero attendance documents for January, and the index occupies 2.74 MB.
+
+Repeated the same warmed GET profiles after starting a fresh server with the index:
+
+| Profile | Timed requests | HTTP errors | Duration | Throughput | Overall p50 | Overall p95 | Overall p99 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 1 client × 1 route pass | 7 | 0 | 1.451 s | 4.82 req/s | 61.0 ms | 856.4 ms | 856.4 ms |
+| 5 clients × 4 route passes | 140 | 0 | 14.517 s | 9.64 req/s | 58.7 ms | 1,980.2 ms | 2,858.5 ms |
+
+At 5 clients, department-summary p50/p95 was 1,949.9/2,858.5 ms, down from 4,544.8/6,425.0 ms immediately before this index (about 57% p50 improvement). The test returned 140/140 valid HTTP 200 responses. The wider index increases write and storage costs; at this dataset it is about 2.74 MB. The endpoint is materially faster but still the slowest route, so no unspecified latency target is claimed as passed.

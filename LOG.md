@@ -262,3 +262,13 @@ This file is a plain-language record of how the assignment is built. Each entry 
 **Why:** The punch-out filter/sort has no useful prefix in the prior indexes, so it could scan an employee's history and sort candidates. The compound index matches the equality predicate followed by the requested newest-first range ordering. Early arrival was already handled correctly; a direct test prevents regression and closes the coverage gap.
 
 **Checks:** All 52 Python integration/edge tests passed against the isolated `attendance_api_test` database. MongoDB `executionStats` for the punch-out find/sort/limit query showed `IXSCAN` with `employee_punch_in_desc`, no collection scan, and a top-level `LIMIT`. The extra index adds storage and per-write maintenance, accepted to support this core punch-out operation. No latency claim is made for this query beyond its indexed plan; the 100k GET benchmark does not exercise punch-out writes.
+
+## 2026-10-12 - Reduced department summary scan cost
+
+**What changed:** Added `department_summary_cover`, a date-leading compound index with `emp_code`, `status`, `half_day`, `work_hours`, and `late_minutes`, plus a startup-index assertion. Updated `DECISIONS.md` and `QA_REPORT.md` with its purpose, footprint, and results.
+
+**Why:** Explain showed the pipeline used the date index but fetched all ~31k matching January attendance documents before reducing/grouping them. A temporary copy of the proposed index on the synthetic benchmark DB changed the winning plan to `PROJECTION_COVERED` and reduced `totalDocsExamined` to zero. The index was measured at 2,736,128 bytes on 100k rows, a reasonable read/write/storage tradeoff for this slow analytics route.
+
+**Checks:** Full Python suite remains 52/52 passing on `attendance_api_test`. With a fresh server using the final startup index and `attendance_scale` (1,000 employees / 100,000 logs), 1 client × 1 pass completed 7/7 with no errors in 1.451s (overall p95 856.4ms). Five clients × 4 passes completed 140/140 with no errors in 14.517s at 9.64 req/s (overall p50/p95/p99 58.7/1,980.2/2,858.5ms). Summary p50/p95 was 1,949.9/2,858.5ms versus 4,544.8/6,425.0ms immediately before adding this index, a ~57% p50 reduction. Explain confirmed 31,000 index keys and zero documents examined.
+
+**Remaining limit:** Department summary remains the slowest route (~1.95s p50 under five clients) because it must aggregate the month's 31k entries. The load harness has no specified latency acceptance threshold, so this is a measured improvement, not a claim that an unknown SLO has passed. No stale/cache layer or denormalized state was introduced; analytics remain derived from MongoDB's current raw attendance and employee collections.
