@@ -254,6 +254,25 @@ class AttendanceEdgeQa(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["items"], [])
 
+    def test_department_summary_counts_zero_log_employees_once(self):
+        """Headcount includes eligible employees without logs, but not future hires."""
+        self.assertEqual(self.post_in("2026-10-12").status_code, 201)
+        punch_out = self.client.post("/attendance/punch-out", json={
+            "emp_code": self.regular,
+            "punched_at": epoch("2026-10-12T18:30:00+05:30"),
+        })
+        self.assertEqual(punch_out.status_code, 200)
+
+        response = self.client.get("/analytics/departments/summary", params={
+            "month": "2026-10", "department": "QA-Team",
+        })
+        self.assertEqual(response.status_code, 200)
+        row = response.json()["items"][0]
+        self.assertEqual(row["headcount"], 4)
+        self.assertEqual(row["present_days"], 1)
+        self.assertAlmostEqual(row["avg_work_hours"], 9.0)
+        self.assertEqual(row["late_count"], 0)
+
     def test_37_leaderboard_invalid_cutoff_is_rejected(self):
         self.assertEqual(self.client.get("/analytics/leaderboard/late", params={"month": "2026-10", "limit": 0}).status_code, 422)
         self.assertEqual(self.client.get("/analytics/leaderboard/late", params={"month": "2026-10", "limit": 51}).status_code, 422)

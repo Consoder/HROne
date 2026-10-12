@@ -438,13 +438,75 @@ def employee_monthly(emp_code: str, month: str) -> dict[str, Any]:
 
 
 def summary_pipeline(month: str, department: str | None) -> list[dict[str, Any]]:
-    """Start with employees so zero-log joined employees remain in department headcount."""
-    _, end, dates = month_match(month); base: dict[str, Any] = {"joined_on": {"$lte": end.isoformat()}}
-    if department is not None: base["department"] = department
-    return [{"$match": base}, {"$lookup": {"from": "attendance_logs", "let": {"code": "$emp_code"}, "pipeline": [{"$match": {"$expr": {"$eq": ["$emp_code", "$$code"]}, **dates}}, {"$set": {"weekday": weekday()}}], "as": "logs"}}, {"$unwind": {"path": "$logs", "preserveNullAndEmptyArrays": True}}, {"$group": {"_id": "$department", "employees": {"$addToSet": "$emp_code"},
-        "present_days": {"$sum": {"$cond": [{"$and": [{"$ifNull": ["$logs.weekday", False]}, {"$in": ["$logs.status", list(PRESENT)]}]}, {"$cond": [{"$ifNull": ["$logs.half_day", False]}, .5, 1]}, 0]}},
-        "work": {"$push": {"$cond": [{"$and": [{"$in": ["$logs.status", list(PRESENT)]}, {"$ne": [{"$ifNull": ["$logs.work_hours", None]}, None]}]}, "$logs.work_hours", "$$REMOVE"]}},
-        "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$logs.late_minutes", 0]}, 0]}, 1, 0]}}, "total_late_minutes": {"$sum": {"$ifNull": ["$logs.late_minutes", 0]}}, "leave_count": {"$sum": {"$cond": [{"$eq": ["$logs.status", "LEAVE"]}, 1, 0]}}, "on_duty_count": {"$sum": {"$cond": [{"$eq": ["$logs.status", "ON_DUTY"]}, 1, 0]}}}}, {"$project": {"_id": 0, "department": "$_id", "headcount": {"$size": "$employees"}, "present_days": 1, "avg_work_hours": {"$cond": [{"$gt": [{"$size": "$work"}, 0]}, {"$avg": "$work"}, None]}, "late_count": 1, "total_late_minutes": 1, "leave_count": 1, "on_duty_count": 1}}, {"$sort": {"department": 1}}]
+    """Union eligible employees with per-employee log aggregates.
+
+    The employee stream preserves headcount for people with no attendance logs.
+    Attendance is scanned once for the month, reduced to one row per employee,
+    then joined to employee details instead of running one indexed lookup per
+    employee and unwinding every log into the outer department group.
+    """
+    _, end, dates = month_match(month)
+    employees_match: dict[str, Any] = {"joined_on": {"$lte": end.isoformat()}}
+    if department is not None:
+        employees_match["department"] = department
+
+    present_condition = {"$and": ["$weekday", {"$in": ["$status", list(PRESENT)]}]}
+    has_work_hours = {"$and": [
+        {"$in": ["$status", list(PRESENT)]},
+        {"$ne": [{"$ifNull": ["$work_hours", None]}, None]},
+    ]}
+    per_employee_logs: list[dict[str, Any]] = [
+        {"$match": dates},
+        {"$set": {"weekday": weekday()}},
+        {"$group": {
+            "_id": "$emp_code",
+            "present_days": {"$sum": {"$cond": [present_condition, {"$cond": [{"$ifNull": ["$half_day", False]}, .5, 1]}, 0]}},
+            "work_hours_sum": {"$sum": {"$cond": [has_work_hours, "$work_hours", 0]}},
+            "work_hours_count": {"$sum": {"$cond": [has_work_hours, 1, 0]}},
+            "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]}},
+            "total_late_minutes": {"$sum": {"$ifNull": ["$late_minutes", 0]}},
+            "leave_count": {"$sum": {"$cond": [{"$eq": ["$status", "LEAVE"]}, 1, 0]}},
+            "on_duty_count": {"$sum": {"$cond": [{"$eq": ["$status", "ON_DUTY"]}, 1, 0]}},
+        }},
+        {"$lookup": {"from": "employees", "localField": "_id", "foreignField": "emp_code", "as": "employee"}},
+        {"$unwind": "$employee"},
+        {"$match": {"employee.joined_on": {"$lte": end.isoformat()}}},
+    ]
+    if department is not None:
+        per_employee_logs.append({"$match": {"employee.department": department}})
+    per_employee_logs.append({"$project": {
+        "_id": 0,
+        "department": "$employee.department",
+        "headcount": {"$literal": 0},
+        "present_days": 1,
+        "work_hours_sum": 1,
+        "work_hours_count": 1,
+        "late_count": 1,
+        "total_late_minutes": 1,
+        "leave_count": 1,
+        "on_duty_count": 1,
+    }})
+
+    return [
+        {"$match": employees_match},
+        {"$project": {"_id": 0, "department": 1, "headcount": {"$literal": 1}, "present_days": {"$literal": 0}, "work_hours_sum": {"$literal": 0}, "work_hours_count": {"$literal": 0}, "late_count": {"$literal": 0}, "total_late_minutes": {"$literal": 0}, "leave_count": {"$literal": 0}, "on_duty_count": {"$literal": 0}}},
+        {"$unionWith": {"coll": "attendance_logs", "pipeline": per_employee_logs}},
+        {"$group": {
+            "_id": "$department",
+            "headcount": {"$sum": "$headcount"},
+            "present_days": {"$sum": "$present_days"},
+            "work_hours_sum": {"$sum": "$work_hours_sum"},
+            "work_hours_count": {"$sum": "$work_hours_count"},
+            "late_count": {"$sum": "$late_count"},
+            "total_late_minutes": {"$sum": "$total_late_minutes"},
+            "leave_count": {"$sum": "$leave_count"},
+            "on_duty_count": {"$sum": "$on_duty_count"},
+        }},
+        {"$project": {"_id": 0, "department": "$_id", "headcount": 1, "present_days": 1,
+            "avg_work_hours": {"$cond": [{"$gt": ["$work_hours_count", 0]}, {"$divide": ["$work_hours_sum", "$work_hours_count"]}, None]},
+            "late_count": 1, "total_late_minutes": 1, "leave_count": 1, "on_duty_count": 1}},
+        {"$sort": {"department": 1}},
+    ]
 
 
 @app.get("/analytics/departments/summary")
@@ -457,11 +519,33 @@ def department_summary(month: str, department: str | None = None) -> dict[str, A
 
 
 def leaderboard_pipeline(month: str, limit: int, department: str | None) -> list[dict[str, Any]]:
-    """$rank produces competition ranking; limiting happens after rank calculation."""
+    """Aggregate attendance per employee before joining names/departments.
+
+    Joining once per punch scales with employees who have records in the month,
+    rather than with every attendance document. $rank still runs before limit
+    so all ties at the requested cutoff remain included.
+    """
     _, _, dates = month_match(month)
-    pipeline: list[dict[str, Any]] = [{"$match": dates}, {"$lookup": {"from": "employees", "localField": "emp_code", "foreignField": "emp_code", "as": "e"}}, {"$unwind": "$e"}]
-    if department is not None: pipeline.append({"$match": {"e.department": department}})
-    return pipeline + [{"$group": {"_id": "$emp_code", "name": {"$first": "$e.name"}, "department": {"$first": "$e.department"}, "total_late_minutes": {"$sum": {"$ifNull": ["$late_minutes", 0]}}, "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]}}}}, {"$match": {"total_late_minutes": {"$gt": 0}}}, {"$setWindowFields": {"sortBy": {"total_late_minutes": -1}, "output": {"rank": {"$rank": {}}}}}, {"$match": {"rank": {"$lte": limit}}}, {"$project": {"_id": 0, "emp_code": "$_id", "name": 1, "department": 1, "total_late_minutes": 1, "late_count": 1, "rank": 1}}, {"$sort": {"total_late_minutes": -1, "emp_code": 1}}]
+    pipeline: list[dict[str, Any]] = [
+        {"$match": dates},
+        {"$group": {
+            "_id": "$emp_code",
+            "total_late_minutes": {"$sum": {"$ifNull": ["$late_minutes", 0]}},
+            "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]}},
+        }},
+        {"$match": {"total_late_minutes": {"$gt": 0}}},
+        {"$lookup": {"from": "employees", "localField": "_id", "foreignField": "emp_code", "as": "employee"}},
+        {"$unwind": "$employee"},
+    ]
+    if department is not None:
+        pipeline.append({"$match": {"employee.department": department}})
+    return pipeline + [
+        {"$set": {"name": "$employee.name", "department": "$employee.department"}},
+        {"$setWindowFields": {"sortBy": {"total_late_minutes": -1}, "output": {"rank": {"$rank": {}}}}},
+        {"$match": {"rank": {"$lte": limit}}},
+        {"$project": {"_id": 0, "emp_code": "$_id", "name": 1, "department": 1, "total_late_minutes": 1, "late_count": 1, "rank": 1}},
+        {"$sort": {"total_late_minutes": -1, "emp_code": 1}},
+    ]
 
 
 @app.get("/analytics/leaderboard/late")
@@ -473,11 +557,48 @@ def leaderboard(month: str, limit: int = Query(10, ge=1, le=50), department: str
 # The trend endpoint's pipeline is intentionally reused by explain below.  That
 # prevents an explain plan from accidentally measuring different work.
 def trend_pipeline(department: str, start: date, end: date) -> list[dict[str, Any]]:
-    """Use $unionWith + $densify to fill no-log days inside MongoDB, not Python."""
+    """Use employee/date index lookups, then $densify no-log days in MongoDB.
+
+    Starting from the department's employees avoids joining every matching
+    attendance row back to employees. The correlated lookup can use the unique
+    (emp_code, date) index and returns only this department's requested logs.
+    """
     lo, hi = datetime.combine(start, time.min, UTC), datetime.combine(end + timedelta(days=1), time.min, UTC)
     seed = [{"$match": {"department": department}}, {"$limit": 1}, {"$project": {"day": {"$literal": lo}, "present_count": {"$literal": 0}, "late_count": {"$literal": 0}}}]
-    logs = [{"$match": {"date": {"$gte": start.isoformat(), "$lte": end.isoformat()}}}, {"$lookup": {"from": "employees", "localField": "emp_code", "foreignField": "emp_code", "as": "e"}}, {"$unwind": "$e"}, {"$match": {"e.department": department}}, {"$set": {"day": {"$dateFromString": {"dateString": "$date"}}}}, {"$group": {"_id": "$day", "present_count": {"$sum": {"$cond": [{"$in": ["$status", list(PRESENT)]}, {"$cond": [{"$ifNull": ["$half_day", False]}, .5, 1]}, 0]}}, "late_count": {"$sum": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]}}}}, {"$project": {"_id": 0, "day": "$_id", "present_count": 1, "late_count": 1}}]
-    return seed + [{"$unionWith": {"coll": "attendance_logs", "pipeline": logs}}, {"$group": {"_id": "$day", "present_count": {"$sum": "$present_count"}, "late_count": {"$sum": "$late_count"}}}, {"$project": {"_id": 0, "day": "$_id", "present_count": 1, "late_count": 1}}, {"$densify": {"field": "day", "range": {"step": 1, "unit": "day", "bounds": [lo, hi]}}}, {"$match": {"day": {"$lt": hi}}}, {"$set": {"date": {"$dateToString": {"date": "$day", "format": "%Y-%m-%d", "timezone": "UTC"}}, "is_working_day": {"$lte": [{"$isoDayOfWeek": "$day"}, 5]}}}, {"$lookup": {"from": "employees", "let": {"date": "$date"}, "pipeline": [{"$match": {"department": department}}, {"$match": {"$expr": {"$lte": ["$joined_on", "$$date"]}}}, {"$count": "n"}], "as": "people"}}, {"$set": {"headcount": {"$ifNull": [{"$first": "$people.n"}, 0]}, "present_count": {"$ifNull": ["$present_count", 0]}, "late_count": {"$ifNull": ["$late_count", 0]}}}, {"$set": {"attendance_rate": {"$cond": [{"$and": ["$is_working_day", {"$gt": ["$headcount", 0]}]}, {"$divide": ["$present_count", "$headcount"]}, None]}}}, {"$setWindowFields": {"sortBy": {"day": 1}, "output": {"moving_avg_7d": {"$avg": "$attendance_rate", "window": {"documents": [-6, 0]}}}}}, {"$project": {"_id": 0, "date": 1, "is_working_day": 1, "headcount": 1, "present_count": 1, "late_count": 1, "attendance_rate": 1, "moving_avg_7d": 1}}, {"$sort": {"date": 1}}]
+    department_logs = [
+        {"$match": {"department": department}},
+        {"$lookup": {
+            "from": "attendance_logs",
+            "let": {"employee_code": "$emp_code"},
+            "pipeline": [
+                {"$match": {"$expr": {"$eq": ["$emp_code", "$$employee_code"]}, "date": {"$gte": start.isoformat(), "$lte": end.isoformat()}}},
+                {"$set": {"day": {"$dateFromString": {"dateString": "$date"}}}},
+                {"$project": {
+                    "_id": 0,
+                    "day": 1,
+                    "present_count": {"$cond": [{"$in": ["$status", list(PRESENT)]}, {"$cond": [{"$ifNull": ["$half_day", False]}, .5, 1]}, 0]},
+                    "late_count": {"$cond": [{"$gt": [{"$ifNull": ["$late_minutes", 0]}, 0]}, 1, 0]},
+                }},
+            ],
+            "as": "daily_logs",
+        }},
+        {"$unwind": "$daily_logs"},
+        {"$replaceRoot": {"newRoot": "$daily_logs"}},
+    ]
+    return seed + [
+        {"$unionWith": {"coll": "employees", "pipeline": department_logs}},
+        {"$group": {"_id": "$day", "present_count": {"$sum": "$present_count"}, "late_count": {"$sum": "$late_count"}}},
+        {"$project": {"_id": 0, "day": "$_id", "present_count": 1, "late_count": 1}},
+        {"$densify": {"field": "day", "range": {"step": 1, "unit": "day", "bounds": [lo, hi]}}},
+        {"$match": {"day": {"$lt": hi}}},
+        {"$set": {"date": {"$dateToString": {"date": "$day", "format": "%Y-%m-%d", "timezone": "UTC"}}, "is_working_day": {"$lte": [{"$isoDayOfWeek": "$day"}, 5]}}},
+        {"$lookup": {"from": "employees", "let": {"date": "$date"}, "pipeline": [{"$match": {"department": department}}, {"$match": {"$expr": {"$lte": ["$joined_on", "$$date"]}}}, {"$count": "n"}], "as": "people"}},
+        {"$set": {"headcount": {"$ifNull": [{"$first": "$people.n"}, 0]}, "present_count": {"$ifNull": ["$present_count", 0]}, "late_count": {"$ifNull": ["$late_count", 0]}}},
+        {"$set": {"attendance_rate": {"$cond": [{"$and": ["$is_working_day", {"$gt": ["$headcount", 0]}]}, {"$divide": ["$present_count", "$headcount"]}, None]}}},
+        {"$setWindowFields": {"sortBy": {"day": 1}, "output": {"moving_avg_7d": {"$avg": "$attendance_rate", "window": {"documents": [-6, 0]}}}}},
+        {"$project": {"_id": 0, "date": 1, "is_working_day": 1, "headcount": 1, "present_count": 1, "late_count": 1, "attendance_rate": 1, "moving_avg_7d": 1}},
+        {"$sort": {"date": 1}},
+    ]
 
 
 @app.get("/analytics/departments/{department}/trend")
